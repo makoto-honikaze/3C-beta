@@ -1,0 +1,5 @@
+streamlit>=1.30
+anthropic>=0.40
+python-pptx>=0.6.21
+matplotlib>=3.8
+python-dotenv>=1.0
