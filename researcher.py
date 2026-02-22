@@ -1,6 +1,7 @@
 """Claude API web_search を使った3C分析リサーチモジュール"""
 
 import json
+import re
 import time
 import traceback
 import anthropic
@@ -46,13 +47,23 @@ def _create_client() -> anthropic.Anthropic:
 
 # --- 安全なアクセスヘルパー ---
 
+def _clean_cite_tags(text) -> str:
+    """citeタグを除去してテキストのみ残す"""
+    if not isinstance(text, str):
+        return text if text is not None else ""
+    text = re.sub(r'<cite\s+index="[^"]*"?\s*/?>', '', text)
+    text = re.sub(r'</cite>', '', text)
+    text = re.sub(r'</', '', text)  # 閉じタグが途中で切れるケースも対応
+    return text.strip()
+
+
 def _safe_str(val) -> str:
-    """どんな値でも安全にstrに変換"""
+    """どんな値でも安全にstrに変換し、citeタグも除去"""
     if val is None:
         return ""
     if isinstance(val, str):
-        return val
-    return str(val)
+        return _clean_cite_tags(val)
+    return _clean_cite_tags(str(val))
 
 
 def _safe_get(obj, key, default=None):
@@ -157,7 +168,7 @@ def _extract_text_and_sources(response) -> tuple[str, list[dict]]:
             seen_urls.add(s["url"])
             unique_sources.append(s)
 
-    combined_text = "\n".join(text_parts)
+    combined_text = _clean_cite_tags("\n".join(text_parts))
     return combined_text, unique_sources
 
 

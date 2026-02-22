@@ -118,12 +118,12 @@ def _create_positioning_map(result: ResearchResult) -> bytes:
 
 
 def _create_timeline(result: ResearchResult) -> bytes:
-    """タイムライン画像を生成"""
+    """タイムライン画像を生成（最大8件、交互配置で重なり防止）"""
     events = result.company.timeline
     if not events:
         return b""
 
-    fig, ax = plt.subplots(figsize=(9, 2.5))
+    fig, ax = plt.subplots(figsize=(10, 3.5))
 
     years = []
     labels = []
@@ -133,23 +133,36 @@ def _create_timeline(result: ResearchResult) -> bytes:
         except (ValueError, IndexError):
             continue
         years.append(y)
-        labels.append(f"{e.year}\n{e.description[:20]}")
+        # 説明文を15文字で切り詰め
+        desc = e.description[:15] + "…" if len(e.description) > 15 else e.description
+        labels.append(f"{e.year}\n{desc}")
 
     if not years:
         plt.close(fig)
         return b""
 
-    y_pos = [0] * len(years)
-    ax.scatter(years, y_pos, s=80, c="#0F3460", zorder=5)
+    # 最大8件に制限
+    if len(years) > 8:
+        years = years[:8]
+        labels = labels[:8]
 
+    y_pos = [0] * len(years)
+    ax.scatter(years, y_pos, s=60, c="#0F3460", zorder=5)
+
+    # 交互に上下に大きくずらして重なりを防止
     for i, (year, label) in enumerate(zip(years, labels)):
-        offset = 15 if i % 2 == 0 else -25
-        ax.annotate(label, (year, 0), fontsize=7, ha="center",
-                    xytext=(0, offset), textcoords="offset points",
+        if i % 2 == 0:
+            offset_y = 30
+            va = "bottom"
+        else:
+            offset_y = -30
+            va = "top"
+        ax.annotate(label, (year, 0), fontsize=6, ha="center", va=va,
+                    xytext=(0, offset_y), textcoords="offset points",
                     arrowprops=dict(arrowstyle="-", color="#ccc", lw=0.5))
 
     ax.axhline(y=0, color="#0F3460", linewidth=2, alpha=0.5)
-    ax.set_ylim(-1, 1)
+    ax.set_ylim(-1.5, 1.5)
     ax.set_yticks([])
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
@@ -315,16 +328,27 @@ def _slide_company(prs: Presentation, result: ResearchResult):
     tf_n = txBox_n.text_frame
     _add_text(tf_n, "最新ニュース", size=PptxStyle.SIZE_HEADING, bold=True, color=PptxStyle.SECONDARY)
 
+    # スライド下端までの残りスペースに応じてニュース件数を制限
+    max_news_y = 6.8
+    available = max_news_y - (news_y + 0.5)
+    news_spacing = 0.85  # 各ニュース間のスペース
+    max_news_count = max(1, int(available / news_spacing))
+    display_news = company.recent_news[:min(4, max_news_count)]
+
     y = news_y + 0.5
-    for news in company.recent_news[:5]:
-        txBox_item = slide2.shapes.add_textbox(Inches(0.7), Inches(y), Inches(10.5), Inches(0.45))
+    for news in display_news:
+        if y + news_spacing > max_news_y:
+            break
+        txBox_item = slide2.shapes.add_textbox(Inches(0.7), Inches(y), Inches(10.5), Inches(0.7))
         tf_item = txBox_item.text_frame
         tf_item.word_wrap = True
         date_str = f"[{news.date}] " if news.date else ""
-        _add_text(tf_item, f"{date_str}{news.title}", size=PptxStyle.SIZE_BODY, color=PptxStyle.TEXT_DARK)
+        title_text = news.title[:60] + "…" if len(news.title) > 60 else news.title
+        _add_text(tf_item, f"{date_str}{title_text}", size=PptxStyle.SIZE_BODY, color=PptxStyle.TEXT_DARK)
         if news.summary:
-            _add_text(tf_item, f"  {news.summary[:100]}", size=PptxStyle.SIZE_SMALL, color="666666")
-        y += 0.55
+            summary_text = news.summary[:80] + "…" if len(news.summary) > 80 else news.summary
+            _add_text(tf_item, f"  {summary_text}", size=PptxStyle.SIZE_SMALL, color="666666")
+        y += news_spacing
 
     # --- ページ3: SNS・ブランド評価 ---
     if company.sns_analysis or company.brand_momentum:
@@ -445,7 +469,7 @@ def _slide_competitor(prs: Presentation, result: ResearchResult):
 
 
 def _slide_customer(prs: Presentation, result: ResearchResult):
-    """Customer分析スライド（1ページ）"""
+    """Customer分析スライド（内容量に応じて1〜2ページ）"""
     customer = result.customer
     slide = prs.slides.add_slide(prs.slide_layouts[6])
 
@@ -457,59 +481,91 @@ def _slide_customer(prs: Presentation, result: ResearchResult):
     _set_shape_bg(line, "27AE60")
     line.line.fill.background()
 
+    MAX_Y = 6.5  # スライド下端の安全マージン
+
     # 市場規模
     y = 1.2
     if customer.market_size:
-        txBox_ms = slide.shapes.add_textbox(Inches(0.5), Inches(y), Inches(11), Inches(0.35))
+        txBox_ms = slide.shapes.add_textbox(Inches(0.5), Inches(y), Inches(11), Inches(0.3))
         tf_ms = txBox_ms.text_frame
         _add_text(tf_ms, "市場規模", size=PptxStyle.SIZE_HEADING, bold=True, color=PptxStyle.SECONDARY)
 
-        txBox_msv = slide.shapes.add_textbox(Inches(0.7), Inches(y + 0.4), Inches(10.5), Inches(0.6))
+        market_text = customer.market_size[:200] + "…" if len(customer.market_size) > 200 else customer.market_size
+        txBox_msv = slide.shapes.add_textbox(Inches(0.7), Inches(y + 0.35), Inches(10.5), Inches(0.5))
         tf_msv = txBox_msv.text_frame
         tf_msv.word_wrap = True
-        _add_text(tf_msv, customer.market_size, size=PptxStyle.SIZE_BODY, color=PptxStyle.TEXT_DARK)
-        y += 1.2
+        _add_text(tf_msv, market_text, size=PptxStyle.SIZE_BODY, color=PptxStyle.TEXT_DARK)
+        y += 1.1
 
     # 市場トレンド
     if customer.market_trend:
-        txBox_mt = slide.shapes.add_textbox(Inches(0.5), Inches(y), Inches(11), Inches(0.35))
+        txBox_mt = slide.shapes.add_textbox(Inches(0.5), Inches(y), Inches(11), Inches(0.3))
         tf_mt = txBox_mt.text_frame
         _add_text(tf_mt, "市場トレンド", size=PptxStyle.SIZE_HEADING, bold=True, color=PptxStyle.SECONDARY)
 
-        txBox_mtv = slide.shapes.add_textbox(Inches(0.7), Inches(y + 0.4), Inches(10.5), Inches(0.8))
+        trend_text = customer.market_trend[:200] + "…" if len(customer.market_trend) > 200 else customer.market_trend
+        txBox_mtv = slide.shapes.add_textbox(Inches(0.7), Inches(y + 0.35), Inches(10.5), Inches(0.7))
         tf_mtv = txBox_mtv.text_frame
         tf_mtv.word_wrap = True
-        _add_text(tf_mtv, customer.market_trend[:300], size=PptxStyle.SIZE_BODY, color=PptxStyle.TEXT_DARK)
-        y += 1.4
+        _add_text(tf_mtv, trend_text, size=PptxStyle.SIZE_BODY, color=PptxStyle.TEXT_DARK)
+        y += 1.3
 
     # ターゲット顧客層
     if customer.target_segments or customer.target_description:
-        txBox_tg = slide.shapes.add_textbox(Inches(0.5), Inches(y), Inches(11), Inches(0.35))
+        # 残りスペースが足りなければ次のスライドへ
+        if y + 1.0 > MAX_Y:
+            slide = prs.slides.add_slide(prs.slide_layouts[6])
+            txBox_t2 = slide.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(11), Inches(0.6))
+            tf_t2 = txBox_t2.text_frame
+            _add_text(tf_t2, "Customer - 顧客分析（続き）", size=PptxStyle.SIZE_TITLE, bold=True, color=PptxStyle.PRIMARY)
+            line2 = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0.5), Inches(0.9), Inches(11), Pt(3))
+            _set_shape_bg(line2, "27AE60")
+            line2.line.fill.background()
+            y = 1.2
+
+        txBox_tg = slide.shapes.add_textbox(Inches(0.5), Inches(y), Inches(11), Inches(0.3))
         tf_tg = txBox_tg.text_frame
         _add_text(tf_tg, "ターゲット顧客層", size=PptxStyle.SIZE_HEADING, bold=True, color=PptxStyle.SECONDARY)
 
-        txBox_tgv = slide.shapes.add_textbox(Inches(0.7), Inches(y + 0.4), Inches(10.5), Inches(0.8))
+        txBox_tgv = slide.shapes.add_textbox(Inches(0.7), Inches(y + 0.35), Inches(10.5), Inches(0.7))
         tf_tgv = txBox_tgv.text_frame
         tf_tgv.word_wrap = True
         if customer.target_segments:
-            _add_text(tf_tgv, "・" + "\n・".join(customer.target_segments), size=PptxStyle.SIZE_BODY, color=PptxStyle.TEXT_DARK)
+            segments_text = "・" + "\n・".join(s[:40] for s in customer.target_segments[:5])
+            _add_text(tf_tgv, segments_text, size=PptxStyle.SIZE_BODY, color=PptxStyle.TEXT_DARK)
         if customer.target_description:
-            _add_text(tf_tgv, customer.target_description[:200], size=PptxStyle.SIZE_BODY, color=PptxStyle.TEXT_DARK)
-        y += 1.2
+            desc_text = customer.target_description[:200] + "…" if len(customer.target_description) > 200 else customer.target_description
+            _add_text(tf_tgv, desc_text, size=PptxStyle.SIZE_SMALL, color=PptxStyle.TEXT_DARK)
+        y += 1.3
 
     # 類似事例
     if customer.similar_cases:
-        txBox_sc = slide.shapes.add_textbox(Inches(0.5), Inches(y), Inches(11), Inches(0.35))
+        # 残りスペースが足りなければ次のスライドへ
+        if y + 1.0 > MAX_Y:
+            slide = prs.slides.add_slide(prs.slide_layouts[6])
+            txBox_t3 = slide.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(11), Inches(0.6))
+            tf_t3 = txBox_t3.text_frame
+            _add_text(tf_t3, "Customer - 類似事例", size=PptxStyle.SIZE_TITLE, bold=True, color=PptxStyle.PRIMARY)
+            line3 = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0.5), Inches(0.9), Inches(11), Pt(3))
+            _set_shape_bg(line3, "27AE60")
+            line3.line.fill.background()
+            y = 1.2
+
+        txBox_sc = slide.shapes.add_textbox(Inches(0.5), Inches(y), Inches(11), Inches(0.3))
         tf_sc = txBox_sc.text_frame
         _add_text(tf_sc, "類似事例・参考企業", size=PptxStyle.SIZE_HEADING, bold=True, color=PptxStyle.SECONDARY)
+        y += 0.4
 
         for case in customer.similar_cases[:3]:
-            y += 0.45
-            txBox_case = slide.shapes.add_textbox(Inches(0.7), Inches(y), Inches(10.5), Inches(0.5))
+            if y + 0.8 > MAX_Y:
+                break
+            txBox_case = slide.shapes.add_textbox(Inches(0.7), Inches(y), Inches(10.5), Inches(0.7))
             tf_case = txBox_case.text_frame
             tf_case.word_wrap = True
             _add_text(tf_case, f"{case.company}（{case.industry}）", size=PptxStyle.SIZE_BODY, bold=True, color=PptxStyle.ACCENT)
-            _add_text(tf_case, case.description[:100], size=PptxStyle.SIZE_SMALL, color=PptxStyle.TEXT_DARK)
+            case_desc = case.description[:100] + "…" if len(case.description) > 100 else case.description
+            _add_text(tf_case, case_desc, size=PptxStyle.SIZE_SMALL, color=PptxStyle.TEXT_DARK)
+            y += 0.85
 
 
 def _slide_appendix(prs: Presentation, result: ResearchResult):

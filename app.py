@@ -120,6 +120,14 @@ st.markdown('<div class="sub-title">Claude AI による企業・競合・市場�
 tab_new, tab_history = st.tabs(["🔍 新規分析", "📁 履歴閲覧"])
 
 with tab_new:
+    # クリアボタンのコールバック（on_click内なのでウィジェット描画前に実行される）
+    def _clear_inputs():
+        st.session_state["input_client"] = ""
+        st.session_state["input_industry"] = ""
+        st.session_state["input_orientation"] = ""
+        st.session_state.pop("last_result", None)
+        st.session_state.pop("last_pptx", None)
+
     col1, col2 = st.columns(2)
 
     with col1:
@@ -127,6 +135,7 @@ with tab_new:
             "クライアント名 / ブランド名 *",
             placeholder="例: トヨタ自動車",
             help="分析対象の企業名またはブランド名を入力してください",
+            key="input_client",
         )
 
     with col2:
@@ -134,20 +143,29 @@ with tab_new:
             "業種・業界 *",
             placeholder="例: 自動車業界",
             help="分析対象が属する業種・業界を入力してください",
+            key="input_industry",
         )
 
     orientation = st.text_area(
         "オリエンシート情報（任意）",
         placeholder="オリエンの要点やクライアントから共有された情報があれば入力してください。\n例: 若年層向けのブランディング強化を検討中。SNSでの認知拡大が課題。",
         height=120,
+        key="input_orientation",
     )
 
     st.markdown("---")
 
-    # 実行ボタン
+    # 実行ボタン・クリアボタン
     can_run = bool(client_name and industry)
+    btn_col1, btn_col2 = st.columns([3, 1])
 
-    if st.button("🚀 分析を開始", type="primary", disabled=not can_run, use_container_width=True):
+    with btn_col2:
+        st.button("🗑 クリア", on_click=_clear_inputs, use_container_width=True)
+
+    with btn_col1:
+        run_clicked = st.button("🚀 分析を開始", type="primary", disabled=not can_run, use_container_width=True)
+
+    if run_clicked:
         st.markdown("---")
 
         # 進捗表示
