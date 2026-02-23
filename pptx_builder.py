@@ -69,6 +69,17 @@ def _set_shape_bg(shape, hex_color):
     shape.fill.fore_color.rgb = _hex_to_rgb(hex_color)
 
 
+def _add_blank_slide(prs):
+    """ブランクスライドを追加し、プレースホルダーを削除して返す"""
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    # デフォルトのプレースホルダー図形（緑/ピンクの四角等）を削除
+    sp_tree = slide.shapes._spTree
+    for ph in list(slide.placeholders):
+        sp = ph._element
+        sp_tree.remove(sp)
+    return slide
+
+
 # --- チャート生成（matplotlib → 画像バイト） ---
 
 def _create_positioning_map(result: ResearchResult) -> bytes:
@@ -86,16 +97,16 @@ def _create_positioning_map(result: ResearchResult) -> bytes:
                 fontsize=10, fontweight="bold", color="#E94560",
                 xytext=(8, 8), textcoords="offset points")
 
-    # 直接競合
+    # 直接競合（四角マーカー）
     for c in comp.direct_competitors:
-        ax.scatter([c.position_x], [c.position_y], s=120, c="#0F3460", zorder=4)
+        ax.scatter([c.position_x], [c.position_y], s=100, c="#0F3460", zorder=4, marker="s")
         ax.annotate(c.name, (c.position_x, c.position_y),
                     fontsize=9, color="#333333",
                     xytext=(6, 6), textcoords="offset points")
 
-    # 間接競合
+    # 間接競合（ダイヤモンドマーカー）
     for c in comp.indirect_competitors:
-        ax.scatter([c.position_x], [c.position_y], s=80, c="#999999", zorder=3, marker="D")
+        ax.scatter([c.position_x], [c.position_y], s=60, c="#999999", zorder=3, marker="D")
         ax.annotate(c.name, (c.position_x, c.position_y),
                     fontsize=8, color="#666666",
                     xytext=(6, 6), textcoords="offset points")
@@ -181,7 +192,7 @@ def _create_timeline(result: ResearchResult) -> bytes:
 
 def _slide_cover(prs: Presentation, result: ResearchResult):
     """表紙スライド"""
-    slide = prs.slides.add_slide(prs.slide_layouts[6])  # Blank
+    slide = _add_blank_slide(prs)
 
     # 背景色
     bg = slide.background.fill
@@ -214,7 +225,7 @@ def _slide_cover(prs: Presentation, result: ResearchResult):
 
 def _slide_executive_summary(prs: Presentation, result: ResearchResult):
     """エグゼクティブサマリー"""
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    slide = _add_blank_slide(prs)
 
     # タイトル
     txBox = slide.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(11), Inches(0.6))
@@ -240,25 +251,11 @@ def _slide_executive_summary(prs: Presentation, result: ResearchResult):
 
     y_offset = 2.8
     for i, finding in enumerate(result.key_findings[:5], 1):
-        # 番号付きボックス
-        num_shape = slide.shapes.add_shape(
-            MSO_SHAPE.OVAL, Inches(0.7), Inches(y_offset), Inches(0.35), Inches(0.35)
-        )
-        _set_shape_bg(num_shape, PptxStyle.HIGHLIGHT)
-        num_shape.line.fill.background()
-        num_tf = num_shape.text_frame
-        num_tf.paragraphs[0].alignment = PP_ALIGN.CENTER
-        run = num_tf.paragraphs[0].add_run()
-        run.text = str(i)
-        run.font.size = Pt(11)
-        run.font.bold = True
-        run.font.color.rgb = _hex_to_rgb(PptxStyle.TEXT_LIGHT)
-
-        # ファインディングテキスト
-        txBox_f = slide.shapes.add_textbox(Inches(1.2), Inches(y_offset), Inches(10), Inches(0.4))
+        # ファインディングテキスト（番号付き）
+        txBox_f = slide.shapes.add_textbox(Inches(0.7), Inches(y_offset), Inches(10.5), Inches(0.4))
         tf_f = txBox_f.text_frame
         tf_f.word_wrap = True
-        _add_text(tf_f, finding, size=PptxStyle.SIZE_BODY, color=PptxStyle.TEXT_DARK)
+        _add_text(tf_f, f"{i}. {finding}", size=PptxStyle.SIZE_BODY, bold=True, color=PptxStyle.TEXT_DARK)
 
         y_offset += 0.55
 
@@ -268,7 +265,7 @@ def _slide_company(prs: Presentation, result: ResearchResult):
     company = result.company
 
     # --- ページ1: 企業概要 ---
-    slide1 = prs.slides.add_slide(prs.slide_layouts[6])
+    slide1 = _add_blank_slide(prs)
     # タイトル
     txBox = slide1.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(11), Inches(0.6))
     tf = txBox.text_frame
@@ -305,7 +302,7 @@ def _slide_company(prs: Presentation, result: ResearchResult):
         y += 0.7 if len(value) <= 80 else 1.0
 
     # --- ページ2: 沿革 + 最新動向 ---
-    slide2 = prs.slides.add_slide(prs.slide_layouts[6])
+    slide2 = _add_blank_slide(prs)
     txBox = slide2.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(11), Inches(0.6))
     tf = txBox.text_frame
     _add_text(tf, "Company - 沿革・最新動向", size=PptxStyle.SIZE_TITLE, bold=True, color=PptxStyle.PRIMARY)
@@ -352,7 +349,7 @@ def _slide_company(prs: Presentation, result: ResearchResult):
 
     # --- ページ3: SNS・ブランド評価 ---
     if company.sns_analysis or company.brand_momentum:
-        slide3 = prs.slides.add_slide(prs.slide_layouts[6])
+        slide3 = _add_blank_slide(prs)
         txBox = slide3.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(11), Inches(0.6))
         tf = txBox.text_frame
         _add_text(tf, "Company - ブランド評価・SNS分析", size=PptxStyle.SIZE_TITLE, bold=True, color=PptxStyle.PRIMARY)
@@ -394,7 +391,7 @@ def _slide_competitor(prs: Presentation, result: ResearchResult):
     comp = result.competitor
 
     # --- ページ1: ポジショニングマップ ---
-    slide1 = prs.slides.add_slide(prs.slide_layouts[6])
+    slide1 = _add_blank_slide(prs)
     txBox = slide1.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(11), Inches(0.6))
     tf = txBox.text_frame
     _add_text(tf, "Competitor - ポジショニングマップ", size=PptxStyle.SIZE_TITLE, bold=True, color=PptxStyle.PRIMARY)
@@ -427,7 +424,7 @@ def _slide_competitor(prs: Presentation, result: ResearchResult):
     # --- ページ2: 競合比較表 ---
     all_competitors = comp.direct_competitors + comp.indirect_competitors
     if all_competitors:
-        slide2 = prs.slides.add_slide(prs.slide_layouts[6])
+        slide2 = _add_blank_slide(prs)
         txBox = slide2.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(11), Inches(0.6))
         tf = txBox.text_frame
         _add_text(tf, "Competitor - 競合比較表", size=PptxStyle.SIZE_TITLE, bold=True, color=PptxStyle.PRIMARY)
@@ -471,7 +468,7 @@ def _slide_competitor(prs: Presentation, result: ResearchResult):
 def _slide_customer(prs: Presentation, result: ResearchResult):
     """Customer分析スライド（内容量に応じて1〜2ページ）"""
     customer = result.customer
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    slide = _add_blank_slide(prs)
 
     txBox = slide.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(11), Inches(0.6))
     tf = txBox.text_frame
@@ -514,7 +511,7 @@ def _slide_customer(prs: Presentation, result: ResearchResult):
     if customer.target_segments or customer.target_description:
         # 残りスペースが足りなければ次のスライドへ
         if y + 1.0 > MAX_Y:
-            slide = prs.slides.add_slide(prs.slide_layouts[6])
+            slide = _add_blank_slide(prs)
             txBox_t2 = slide.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(11), Inches(0.6))
             tf_t2 = txBox_t2.text_frame
             _add_text(tf_t2, "Customer - 顧客分析（続き）", size=PptxStyle.SIZE_TITLE, bold=True, color=PptxStyle.PRIMARY)
@@ -542,7 +539,7 @@ def _slide_customer(prs: Presentation, result: ResearchResult):
     if customer.similar_cases:
         # 残りスペースが足りなければ次のスライドへ
         if y + 1.0 > MAX_Y:
-            slide = prs.slides.add_slide(prs.slide_layouts[6])
+            slide = _add_blank_slide(prs)
             txBox_t3 = slide.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(11), Inches(0.6))
             tf_t3 = txBox_t3.text_frame
             _add_text(tf_t3, "Customer - 類似事例", size=PptxStyle.SIZE_TITLE, bold=True, color=PptxStyle.PRIMARY)
@@ -568,9 +565,149 @@ def _slide_customer(prs: Presentation, result: ResearchResult):
             y += 0.85
 
 
+def _slide_perspective(prs: Presentation, result: ResearchResult):
+    """立場別ニーズ分析スライド（3カラム）"""
+    perspective = result.perspective
+    # データが空なら生成しない
+    if not (perspective.executive.needs or perspective.frontline.needs or perspective.customer.needs):
+        return
+
+    slide = _add_blank_slide(prs)
+
+    # タイトル
+    txBox = slide.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(11), Inches(0.6))
+    tf = txBox.text_frame
+    _add_text(tf, "立場別ニーズ分析", size=PptxStyle.SIZE_TITLE, bold=True, color=PptxStyle.PRIMARY)
+
+    line = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0.5), Inches(0.9), Inches(11), Pt(3))
+    _set_shape_bg(line, "8E44AD")
+    line.line.fill.background()
+
+    # 3カラムの定義
+    columns = [
+        {
+            "title": "経営者視点",
+            "icon": "👔",
+            "color": PptxStyle.ACCENT,
+            "data": perspective.executive,
+            "labels": ["必要なこと", "懸念事項", "成長機会"],
+        },
+        {
+            "title": "現場視点",
+            "icon": "🔧",
+            "color": "27AE60",
+            "data": perspective.frontline,
+            "labels": ["必要なこと", "懸念事項", "改善機会"],
+        },
+        {
+            "title": "顧客視点",
+            "icon": "👤",
+            "color": PptxStyle.HIGHLIGHT,
+            "data": perspective.customer,
+            "labels": ["求めていること", "不安・懸念", "理想の体験"],
+        },
+    ]
+
+    col_width = 3.5
+    col_gap = 0.25
+    col_start_x = 0.4
+
+    for col_idx, col in enumerate(columns):
+        x = col_start_x + col_idx * (col_width + col_gap)
+        data = col["data"]
+        values = [data.needs, data.concerns, data.opportunities]
+
+        # カラムヘッダー背景
+        header_shape = slide.shapes.add_shape(
+            MSO_SHAPE.ROUNDED_RECTANGLE,
+            Inches(x), Inches(1.15), Inches(col_width), Inches(0.45),
+        )
+        _set_shape_bg(header_shape, col["color"])
+        header_shape.line.fill.background()
+        h_tf = header_shape.text_frame
+        h_tf.paragraphs[0].alignment = PP_ALIGN.CENTER
+        run = h_tf.paragraphs[0].add_run()
+        run.text = f'{col["icon"]} {col["title"]}'
+        run.font.size = Pt(12)
+        run.font.bold = True
+        run.font.color.rgb = _hex_to_rgb(PptxStyle.TEXT_LIGHT)
+
+        # 各項目（needs / concerns / opportunities）
+        item_y = 1.75
+        item_spacing = 1.8
+
+        for label, value in zip(col["labels"], values):
+            # ラベル
+            txBox_label = slide.shapes.add_textbox(
+                Inches(x + 0.1), Inches(item_y), Inches(col_width - 0.2), Inches(0.25),
+            )
+            tf_label = txBox_label.text_frame
+            _add_text(tf_label, f"■ {label}", size=8, bold=True, color=col["color"])
+
+            # 値テキスト（最大200文字、十分な高さを確保）
+            display_val = value[:200] + "…" if len(value) > 200 else value
+            txBox_val = slide.shapes.add_textbox(
+                Inches(x + 0.1), Inches(item_y + 0.25), Inches(col_width - 0.2), Inches(1.45),
+            )
+            tf_val = txBox_val.text_frame
+            tf_val.word_wrap = True
+            _add_text(tf_val, display_val or "（情報なし）", size=8, color=PptxStyle.TEXT_DARK)
+
+            item_y += item_spacing
+
+
+def _slide_questions(prs: Presentation, result: ResearchResult):
+    """考えるべき問いスライド（2〜3ページに分割）"""
+    qa = result.questions
+    if not qa or not qa.questions:
+        return
+
+    questions = qa.questions[:30]
+    role_name = qa.role or "総合的なマーケティング担当者"
+    total = len(questions)
+
+    # 1スライドあたり最大12個で分割
+    PER_SLIDE = 12
+    page = 0
+
+    while page * PER_SLIDE < total:
+        start_idx = page * PER_SLIDE
+        end_idx = min(start_idx + PER_SLIDE, total)
+        chunk = questions[start_idx:end_idx]
+
+        slide = _add_blank_slide(prs)
+
+        # タイトル
+        suffix = f"（{page + 1}）" if total > PER_SLIDE else ""
+        txBox = slide.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(11), Inches(0.6))
+        tf = txBox.text_frame
+        _add_text(tf, f"考えるべき問い{suffix}", size=PptxStyle.SIZE_TITLE, bold=True, color=PptxStyle.PRIMARY)
+
+        line = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0.5), Inches(0.9), Inches(11), Pt(3))
+        _set_shape_bg(line, "2980B9")
+        line.line.fill.background()
+
+        # ロール表示
+        txBox_role = slide.shapes.add_textbox(Inches(0.5), Inches(1.05), Inches(11), Inches(0.3))
+        tf_role = txBox_role.text_frame
+        _add_text(tf_role, f"🎭 {role_name} の視点から", size=PptxStyle.SIZE_SMALL, bold=True, color="2980B9")
+
+        # 問いリスト
+        y = 1.45
+        for i, q in enumerate(chunk, start_idx + 1):
+            display_q = q[:120] + "…" if len(q) > 120 else q
+            txBox_q = slide.shapes.add_textbox(Inches(0.6), Inches(y), Inches(10.8), Inches(0.35))
+            tf_q = txBox_q.text_frame
+            tf_q.word_wrap = True
+            _add_text(tf_q, f"{i}. {display_q}", size=9, color=PptxStyle.TEXT_DARK)
+            y += 0.42
+
+        page += 1
+
+
 def _slide_appendix(prs: Presentation, result: ResearchResult):
     """付録 - 情報ソース一覧"""
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    slide = _add_blank_slide(prs)
 
     txBox = slide.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(11), Inches(0.6))
     tf = txBox.text_frame
@@ -588,7 +725,7 @@ def _slide_appendix(prs: Presentation, result: ResearchResult):
     for i, source in enumerate(result.sources[:20], 1):
         if y > 6.5:
             # 次のスライドへ
-            slide = prs.slides.add_slide(prs.slide_layouts[6])
+            slide = _add_blank_slide(prs)
             txBox = slide.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(11), Inches(0.6))
             tf = txBox.text_frame
             _add_text(tf, "付録 - 情報ソース一覧（続き）", size=PptxStyle.SIZE_TITLE, bold=True, color=PptxStyle.PRIMARY)
@@ -624,6 +761,8 @@ def build_pptx(result: ResearchResult, output_dir: str = "output") -> str:
     _slide_company(prs, result)
     _slide_competitor(prs, result)
     _slide_customer(prs, result)
+    _slide_perspective(prs, result)
+    _slide_questions(prs, result)
     _slide_appendix(prs, result)
 
     # ファイル保存
@@ -647,6 +786,8 @@ def build_pptx_bytes(result: ResearchResult) -> bytes:
     _slide_company(prs, result)
     _slide_competitor(prs, result)
     _slide_customer(prs, result)
+    _slide_perspective(prs, result)
+    _slide_questions(prs, result)
     _slide_appendix(prs, result)
 
     buf = io.BytesIO()

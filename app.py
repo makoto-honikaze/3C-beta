@@ -125,6 +125,7 @@ with tab_new:
         st.session_state["input_client"] = ""
         st.session_state["input_industry"] = ""
         st.session_state["input_orientation"] = ""
+        st.session_state["input_role"] = ""
         st.session_state.pop("last_result", None)
         st.session_state.pop("last_pptx", None)
 
@@ -153,6 +154,13 @@ with tab_new:
         key="input_orientation",
     )
 
+    role = st.text_input(
+        "あなたの立場・役割（任意）",
+        placeholder="例: コピーライター / イベント設計者 / プロダクトデザインを中心に活動するデザイナー",
+        help="空欄の場合は「総合的なマーケティング担当者」として問いを生成します",
+        key="input_role",
+    )
+
     st.markdown("---")
 
     # 実行ボタン・クリアボタン
@@ -179,6 +187,8 @@ with tab_new:
                 "competitor": "🏢 Competitor分析: 競合情報を分析中...",
                 "customer": "👥 Customer分析: 市場・顧客情報を分析中...",
                 "summary": "📝 エグゼクティブサマリーを生成中...",
+                "perspective": "🎯 立場別ニーズ分析を生成中...",
+                "questions": "❓ 考えるべき問いを生成中...",
                 "done": "✅ 分析完了！",
             }
 
@@ -194,6 +204,7 @@ with tab_new:
                     company_name=client_name,
                     industry=industry,
                     orientation=orientation,
+                    role=role,
                     on_progress=on_progress,
                 )
 
@@ -236,8 +247,8 @@ with tab_new:
                 )
 
             # タブで結果表示
-            r_tab1, r_tab2, r_tab3, r_tab4 = st.tabs([
-                "📝 サマリー", "📋 Company", "🏢 Competitor", "👥 Customer"
+            r_tab1, r_tab2, r_tab3, r_tab4, r_tab5, r_tab6 = st.tabs([
+                "📝 サマリー", "📋 Company", "🏢 Competitor", "👥 Customer", "🎯 立場別ニーズ", "❓ 考えるべき問い"
             ])
 
             with r_tab1:
@@ -320,6 +331,56 @@ with tab_new:
                             st.markdown(case.description)
                             if case.relevance:
                                 st.markdown(f"**参考ポイント:** {case.relevance}")
+
+            with r_tab5:
+                perspective = result.perspective
+                if perspective:
+                    def _render_perspective(label, icon, view):
+                        st.markdown(f"#### {icon} {label}")
+                        if view:
+                            if view.needs:
+                                st.markdown("**ニーズ:**")
+                                st.info(view.needs)
+                            if view.concerns:
+                                st.markdown("**懸念事項:**")
+                                st.warning(view.concerns)
+                            if view.opportunities:
+                                st.markdown("**機会:**")
+                                st.success(view.opportunities)
+                        else:
+                            st.caption("データなし")
+                        st.markdown("---")
+
+                    col_a, col_b, col_c = st.columns(3)
+                    with col_a:
+                        _render_perspective("経営層視点", "👔", perspective.executive)
+                    with col_b:
+                        _render_perspective("現場担当者視点", "👷", perspective.frontline)
+                    with col_c:
+                        _render_perspective("顧客視点", "🛒", perspective.customer)
+                else:
+                    st.info("立場別ニーズ分析データがありません。")
+
+            with r_tab6:
+                qa = result.questions
+                if qa and qa.questions:
+                    st.markdown(f"#### 🎭 {qa.role} の視点から")
+                    st.markdown("---")
+
+                    groups = [
+                        ("戦略・方向性の問い", qa.questions[0:10]),
+                        ("顧客・市場の問い", qa.questions[10:20]),
+                        ("実行・施策の問い", qa.questions[20:30]),
+                    ]
+
+                    for g_idx, (group_name, group_qs) in enumerate(groups):
+                        if not group_qs:
+                            continue
+                        with st.expander(f"📌 {group_name}（{len(group_qs)}問）", expanded=(g_idx == 0)):
+                            for i, q in enumerate(group_qs, g_idx * 10 + 1):
+                                st.markdown(f"**{i}.** {q}")
+                else:
+                    st.info("問いの生成データがありません。")
 
     elif not can_run:
         st.info("クライアント名と業種を入力して「分析を開始」ボタンを押してください。")

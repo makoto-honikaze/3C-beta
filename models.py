@@ -95,6 +95,29 @@ class SourceInfo:
 
 
 @dataclass
+class PerspectiveView:
+    """1つの立場からの分析"""
+    needs: str = ""
+    concerns: str = ""
+    opportunities: str = ""  # 顧客視点の場合は "desires" として使う
+
+
+@dataclass
+class PerspectiveAnalysis:
+    """立場別ニーズ分析（経営者/現場/顧客）"""
+    executive: PerspectiveView = field(default_factory=PerspectiveView)
+    frontline: PerspectiveView = field(default_factory=PerspectiveView)
+    customer: PerspectiveView = field(default_factory=PerspectiveView)
+
+
+@dataclass
+class QuestionsAnalysis:
+    """問いの自動生成結果"""
+    role: str = "総合的なマーケティング担当者"
+    questions: list[str] = field(default_factory=list)
+
+
+@dataclass
 class ResearchResult:
     """3C分析の全結果"""
     client_name: str
@@ -103,6 +126,8 @@ class ResearchResult:
     company: CompanyInfo = field(default_factory=CompanyInfo)
     competitor: CompetitorInfo = field(default_factory=CompetitorInfo)
     customer: CustomerInfo = field(default_factory=CustomerInfo)
+    perspective: PerspectiveAnalysis = field(default_factory=PerspectiveAnalysis)
+    questions: QuestionsAnalysis = field(default_factory=QuestionsAnalysis)
     key_findings: list[str] = field(default_factory=list)
     sources: list[SourceInfo] = field(default_factory=list)
     created_at: str = field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d %H:%M"))

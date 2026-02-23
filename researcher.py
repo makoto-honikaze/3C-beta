@@ -9,6 +9,7 @@ from config import get_api_key, CLAUDE_MODEL, CLAUDE_MAX_TOKENS
 from models import (
     ResearchResult, CompanyInfo, CompetitorInfo, CustomerInfo,
     TimelineEvent, NewsItem, SNSInfo, Competitor, SimilarCase, SourceInfo,
+    PerspectiveAnalysis, PerspectiveView, QuestionsAnalysis,
 )
 
 
@@ -510,13 +511,204 @@ def generate_key_findings(client: anthropic.Anthropic, result: ResearchResult) -
     findings = data.get("key_findings", ["分析データの詳細は各セクションをご確認ください。"])
     if not isinstance(findings, list):
         findings = [_safe_str(findings)]
-    return [_safe_str(f) for f in findings]
+    return [_normalize_finding(f) for f in findings]
+
+
+def _normalize_finding(item) -> str:
+    """key_findingsの各要素を文字列に正規化する。
+    dict/JSON文字列/str(dict)のいずれの形式でも対応。"""
+    import ast as _ast
+
+    # 既にdictの場合
+    if isinstance(item, dict):
+        return _format_finding_dict(item)
+
+    # 文字列に変換
+    s = _safe_str(item)
+
+    # JSON文字列またはstr(dict)のパースを試行
+    if ("{" in s and "}" in s):
+        # JSON形式のパース
+        try:
+            parsed = json.loads(s)
+            if isinstance(parsed, dict):
+                return _format_finding_dict(parsed)
+        except (json.JSONDecodeError, ValueError):
+            pass
+        # Pythonリテラル（str(dict)の場合 = シングルクォート）
+        try:
+            parsed = _ast.literal_eval(s)
+            if isinstance(parsed, dict):
+                return _format_finding_dict(parsed)
+        except (ValueError, SyntaxError):
+            pass
+        # 正規表現でfinding/detailを抽出
+        import re
+        m_finding = re.search(r"['\"]finding['\"]\s*:\s*['\"](.+?)['\"]", s)
+        m_detail = re.search(r"['\"]detail['\"]\s*:\s*['\"](.+?)['\"]", s)
+        if m_finding:
+            result_str = m_finding.group(1)
+            if m_detail:
+                result_str += "：" + m_detail.group(1)
+            return result_str
+
+    return s
+
+
+def _format_finding_dict(d: dict) -> str:
+    """finding/detailのdictを読みやすい文字列に変換"""
+    finding = _safe_str(d.get("finding", d.get("title", "")))
+    detail = _safe_str(d.get("detail", d.get("description", d.get("details", ""))))
+    if finding and detail:
+        return f"{finding}：{detail}"
+    elif finding:
+        return finding
+    elif detail:
+        return detail
+    # その他のキーがある場合、値を結合
+    parts = [_safe_str(v) for v in d.values() if v]
+    return "：".join(parts) if parts else "（情報なし）"
+
+
+def generate_perspective_analysis(client: anthropic.Anthropic, result: ResearchResult) -> PerspectiveAnalysis:
+    """3C分析結果から立場別ニーズ分析を生成（1回のAPI呼び出しで3立場同時）"""
+    orientation_text = f"\nオリエン情報: {result.orientation_info}" if result.orientation_info else ""
+
+    prompt = f"""以下の3C分析結果を踏まえ、3つの立場からニーズ分析をJSON形式で出力してください。
+
+企業: {result.client_name}（{result.industry}）{orientation_text}
+事業: {result.company.business_overview}
+競合状況: {result.competitor.industry_position}
+市場: {result.customer.market_size} / {result.customer.market_trend}
+
+```json
+{{
+  "executive": {{
+    "needs": "経営者が必要としていること（150字）",
+    "concerns": "経営者の懸念事項（150字）",
+    "opportunities": "経営者にとっての成長機会（150字）"
+  }},
+  "frontline": {{
+    "needs": "現場担当者が必要としていること（150字）",
+    "concerns": "現場の課題・懸念（150字）",
+    "opportunities": "現場にとっての改善機会（150字）"
+  }},
+  "customer": {{
+    "needs": "顧客が求めていること（150字）",
+    "concerns": "顧客の不安・懸念（150字）",
+    "desires": "顧客にとっての理想の体験（150字）"
+  }}
+}}
+```"""
+
+    def _api_call():
+        return client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=2048,
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+    response = _call_api_with_retry(_api_call)
+
+    text = ""
+    content_list = _safe_get(response, "content", [])
+    if isinstance(content_list, list):
+        for block in content_list:
+            if _safe_get_type(block) == "text":
+                text += _safe_str(_safe_get(block, "text", ""))
+
+    data = _parse_json_from_text(text)
+
+    if not data:
+        return PerspectiveAnalysis()
+
+    def _parse_view(key: str) -> PerspectiveView:
+        v = data.get(key, {})
+        if not isinstance(v, dict):
+            return PerspectiveView()
+        return PerspectiveView(
+            needs=_safe_str(v.get("needs", "")),
+            concerns=_safe_str(v.get("concerns", "")),
+            opportunities=_safe_str(v.get("opportunities", v.get("desires", ""))),
+        )
+
+    return PerspectiveAnalysis(
+        executive=_parse_view("executive"),
+        frontline=_parse_view("frontline"),
+        customer=_parse_view("customer"),
+    )
+
+
+def generate_questions(client: anthropic.Anthropic, result: ResearchResult, role: str = "") -> QuestionsAnalysis:
+    """3C分析結果 + オリエン情報 + ロールから、考えるべき問いを30個生成"""
+    effective_role = role.strip() if role and role.strip() else "総合的なマーケティング担当者"
+    orientation_text = f"\nオリエン情報: {result.orientation_info}" if result.orientation_info else ""
+
+    prompt = f"""以下の3C分析結果とオリエン情報を踏まえ、{effective_role}の立場から考えるべき問いを30個生成してください。
+
+企業: {result.client_name}（{result.industry}）{orientation_text}
+事業: {result.company.business_overview}
+ブランドの勢い: {result.company.brand_momentum}
+競合状況: {result.competitor.industry_position}
+市場規模: {result.customer.market_size}
+トレンド: {result.customer.market_trend}
+Key Findings: {'; '.join(result.key_findings[:3])}
+
+条件：
+- 戦略的な大きな問いから、具体的で実務的な小さな問いまで幅広く
+- 経営・ブランド・顧客体験・競合対策・実行施策など多角的な切り口
+- 各問いは1〜2文の疑問文で簡潔に
+- 番号付きリストで出力
+
+出力形式（JSON）：
+```json
+{{"role": "{effective_role}", "questions": ["問い1", "問い2", ... ]}}
+```"""
+
+    def _api_call():
+        return client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=4096,
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+    response = _call_api_with_retry(_api_call)
+
+    text = ""
+    content_list = _safe_get(response, "content", [])
+    if isinstance(content_list, list):
+        for block in content_list:
+            if _safe_get_type(block) == "text":
+                text += _safe_str(_safe_get(block, "text", ""))
+
+    data = _parse_json_from_text(text)
+
+    questions = data.get("questions", [])
+    if not isinstance(questions, list):
+        questions = []
+
+    # 各要素を文字列に正規化
+    clean_questions = []
+    for q in questions:
+        if isinstance(q, dict):
+            # {"question": "..."} 形式の場合
+            q_text = _safe_str(q.get("question", q.get("text", "")))
+        else:
+            q_text = _safe_str(q)
+        if q_text:
+            clean_questions.append(q_text)
+
+    return QuestionsAnalysis(
+        role=effective_role,
+        questions=clean_questions[:30],
+    )
 
 
 def run_full_research(
     company_name: str,
     industry: str,
     orientation: str = "",
+    role: str = "",
     on_progress=None,
 ) -> ResearchResult:
     """3C分析のフルリサーチを実行
@@ -525,6 +717,7 @@ def run_full_research(
         company_name: クライアント名/ブランド名
         industry: 業種・業界
         orientation: オリエンシート情報（任意）
+        role: ユーザーの立場・役割（任意、空欄なら「総合的なマーケティング担当者」）
         on_progress: 進捗コールバック (phase: str, detail: str) -> None
     """
     client = _create_client()
@@ -569,6 +762,20 @@ def run_full_research(
     # 4. キーファインディング生成
     _progress("summary", "エグゼクティブサマリーを生成中...")
     result.key_findings = generate_key_findings(client, result)
+
+    # キーファインディング → 立場別分析 の間にスリープ（レートリミット対策）
+    time.sleep(15)
+
+    # 5. 立場別ニーズ分析
+    _progress("perspective", "立場別ニーズ分析を生成中...")
+    result.perspective = generate_perspective_analysis(client, result)
+
+    # 立場別分析 → 問い生成 の間にスリープ（レートリミット対策）
+    time.sleep(15)
+
+    # 6. 問いの自動生成
+    _progress("questions", "考えるべき問いを生成中...")
+    result.questions = generate_questions(client, result, role)
 
     # 対象企業のポジション座標を保持
     if hasattr(competitor_info, "_target_position"):
