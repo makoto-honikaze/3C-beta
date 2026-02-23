@@ -70,52 +70,141 @@ def _set_shape_bg(shape, hex_color):
 
 
 def _add_blank_slide(prs):
-    """ブランクスライドを追加し、プレースホルダーを削除して返す"""
+    """ブランクスライドを追加し、デフォルト要素を全て削除して返す"""
     slide = prs.slides.add_slide(prs.slide_layouts[6])
-    # デフォルトのプレースホルダー図形（緑/ピンクの四角等）を削除
+    # デフォルトのプレースホルダー図形（緑/ピンクの四角等）を全削除
     sp_tree = slide.shapes._spTree
     for ph in list(slide.placeholders):
         sp = ph._element
         sp_tree.remove(sp)
+    # レイアウトから継承された非プレースホルダー要素も削除
+    from lxml import etree
+    nsmap = {"a": "http://schemas.openxmlformats.org/drawingml/2006/main",
+             "p": "http://schemas.openxmlformats.org/presentationml/2006/main",
+             "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships"}
+    # sp要素（Shape）でidx属性を持つものを除去
+    for sp in list(sp_tree):
+        if sp.tag.endswith("}sp"):
+            nvSpPr = sp.find(".//{%s}nvSpPr" % nsmap["p"])
+            if nvSpPr is not None:
+                nvPr = nvSpPr.find("{%s}nvPr" % nsmap["p"])
+                if nvPr is not None and nvPr.find("{%s}ph" % nsmap["p"]) is not None:
+                    sp_tree.remove(sp)
     return slide
+
+
+def _draw_timeline_shapes(slide, events):
+    """タイムライン（python-pptx図形で構築 - PPTX上で編集可能）"""
+    n = len(events)
+    if n == 0:
+        return
+
+    # タイムライン横線
+    line_y = Inches(2.2)
+    line_left = Inches(0.8)
+    line_width = Inches(10.4)
+    line_shape = slide.shapes.add_shape(
+        MSO_SHAPE.RECTANGLE, line_left, line_y, line_width, Pt(3)
+    )
+    _set_shape_bg(line_shape, PptxStyle.ACCENT)
+    line_shape.line.fill.background()
+
+    # 各イベントの配置
+    spacing = 10.4 / max(n, 1)
+    for i, event in enumerate(events):
+        x_center = 0.8 + spacing * (i + 0.5)
+
+        # 丸マーカー
+        dot_size = 0.2
+        dot = slide.shapes.add_shape(
+            MSO_SHAPE.OVAL,
+            Inches(x_center - dot_size / 2), Inches(2.2 - dot_size * 0.4),
+            Inches(dot_size), Inches(dot_size),
+        )
+        _set_shape_bg(dot, PptxStyle.ACCENT)
+        dot.line.fill.background()
+
+        # テキスト（上下交互配置）
+        desc = event.description[:40] + "…" if len(event.description) > 40 else event.description
+        label_text = f"{event.year}\n{desc}"
+        tb_width = min(spacing + 0.1, 1.8)
+
+        if i % 2 == 0:
+            # 上に配置
+            tb_y = 1.0
+        else:
+            # 下に配置
+            tb_y = 2.6
+
+        txBox = slide.shapes.add_textbox(
+            Inches(x_center - tb_width / 2), Inches(tb_y),
+            Inches(tb_width), Inches(1.0),
+        )
+        tf = txBox.text_frame
+        tf.word_wrap = True
+        _add_text(tf, label_text, size=8, color=PptxStyle.TEXT_DARK, alignment=PP_ALIGN.CENTER)
 
 
 # --- チャート生成（matplotlib → 画像バイト） ---
 
 def _create_positioning_map(result: ResearchResult) -> bytes:
-    """ポジショニングマップの画像を生成"""
+    """ポジショニングマップの画像を生成（ラベル重なり防止付き）"""
     fig, ax = plt.subplots(figsize=(7, 5))
 
     comp = result.competitor
     ax_label_x = comp.positioning_axis_x or "軸1"
     ax_label_y = comp.positioning_axis_y or "軸2"
 
+    # ラベル位置の重なり防止用リスト
+    placed_labels = []  # [(x, y)] 既配置ラベル座標
+
+    def _get_offset(px, py):
+        """既存ラベルと重ならないオフセットを計算"""
+        offsets = [(8, 8), (-8, 8), (8, -12), (-8, -12), (12, 0), (-12, 0)]
+        for ox, oy in offsets:
+            conflict = False
+            for lx, ly in placed_labels:
+                if abs((px + ox / 10) - lx) < 0.8 and abs((py + oy / 10) - ly) < 0.6:
+                    conflict = True
+                    break
+            if not conflict:
+                placed_labels.append((px + ox / 10, py + oy / 10))
+                return (ox, oy)
+        placed_labels.append((px + 8 / 10, py + 8 / 10))
+        return (8, 8)
+
     # 対象企業のプロット
     target_pos = getattr(comp, "_target_position", (5, 5))
     ax.scatter([target_pos[0]], [target_pos[1]], s=200, c="#E94560", zorder=5, marker="*")
-    ax.annotate(result.client_name, (target_pos[0], target_pos[1]),
-                fontsize=10, fontweight="bold", color="#E94560",
-                xytext=(8, 8), textcoords="offset points")
+    t_name = result.client_name[:10] + "…" if len(result.client_name) > 10 else result.client_name
+    t_off = _get_offset(target_pos[0], target_pos[1])
+    ax.annotate(t_name, (target_pos[0], target_pos[1]),
+                fontsize=8, fontweight="bold", color="#E94560",
+                xytext=t_off, textcoords="offset points")
 
     # 直接競合（四角マーカー）
     for c in comp.direct_competitors:
-        ax.scatter([c.position_x], [c.position_y], s=100, c="#0F3460", zorder=4, marker="s")
-        ax.annotate(c.name, (c.position_x, c.position_y),
-                    fontsize=9, color="#333333",
-                    xytext=(6, 6), textcoords="offset points")
+        ax.scatter([c.position_x], [c.position_y], s=80, c="#0F3460", zorder=4, marker="s")
+        c_name = c.name[:10] + "…" if len(c.name) > 10 else c.name
+        c_off = _get_offset(c.position_x, c.position_y)
+        ax.annotate(c_name, (c.position_x, c.position_y),
+                    fontsize=7, color="#333333",
+                    xytext=c_off, textcoords="offset points")
 
     # 間接競合（ダイヤモンドマーカー）
     for c in comp.indirect_competitors:
-        ax.scatter([c.position_x], [c.position_y], s=60, c="#999999", zorder=3, marker="D")
-        ax.annotate(c.name, (c.position_x, c.position_y),
-                    fontsize=8, color="#666666",
-                    xytext=(6, 6), textcoords="offset points")
+        ax.scatter([c.position_x], [c.position_y], s=50, c="#999999", zorder=3, marker="D")
+        c_name = c.name[:10] + "…" if len(c.name) > 10 else c.name
+        c_off = _get_offset(c.position_x, c.position_y)
+        ax.annotate(c_name, (c.position_x, c.position_y),
+                    fontsize=7, color="#666666",
+                    xytext=c_off, textcoords="offset points")
 
     ax.set_xlim(0, 10)
     ax.set_ylim(0, 10)
-    ax.set_xlabel(ax_label_x, fontsize=11)
-    ax.set_ylabel(ax_label_y, fontsize=11)
-    ax.set_title("ポジショニングマップ", fontsize=13, fontweight="bold")
+    ax.set_xlabel(ax_label_x, fontsize=10)
+    ax.set_ylabel(ax_label_y, fontsize=10)
+    ax.set_title("ポジショニングマップ", fontsize=12, fontweight="bold")
     ax.grid(True, alpha=0.3)
     ax.axhline(y=5, color="#ccc", linestyle="--", linewidth=0.8)
     ax.axvline(x=5, color="#ccc", linestyle="--", linewidth=0.8)
@@ -311,12 +400,11 @@ def _slide_company(prs: Presentation, result: ResearchResult):
     _set_shape_bg(line, PptxStyle.ACCENT)
     line.line.fill.background()
 
-    # タイムライン画像
-    timeline_img = _create_timeline(result)
-    if timeline_img:
-        img_stream = io.BytesIO(timeline_img)
-        slide2.shapes.add_picture(img_stream, Inches(0.5), Inches(1.1), Inches(11), Inches(2))
-        news_y = 3.3
+    # タイムライン（python-pptx図形で構築、PPTX上で編集可能）
+    events = company.timeline[:8]  # 最大8件
+    if events:
+        _draw_timeline_shapes(slide2, events)
+        news_y = 3.6
     else:
         news_y = 1.2
 
@@ -403,23 +491,36 @@ def _slide_competitor(prs: Presentation, result: ResearchResult):
     # ポジショニングマップ画像
     map_img = _create_positioning_map(result)
     img_stream = io.BytesIO(map_img)
-    slide1.shapes.add_picture(img_stream, Inches(1.5), Inches(1.2), Inches(7), Inches(5))
+    slide1.shapes.add_picture(img_stream, Inches(0.8), Inches(1.2), Inches(7.5), Inches(5))
 
-    # 凡例
-    txBox_legend = slide1.shapes.add_textbox(Inches(9), Inches(1.5), Inches(2.5), Inches(1.5))
-    tf_legend = txBox_legend.text_frame
-    _add_text(tf_legend, "凡例", size=PptxStyle.SIZE_SMALL, bold=True, color=PptxStyle.SECONDARY)
-    _add_text(tf_legend, f"★ {result.client_name}", size=PptxStyle.SIZE_SMALL, color="E94560")
-    _add_text(tf_legend, "● 直接競合", size=PptxStyle.SIZE_SMALL, color="0F3460")
-    _add_text(tf_legend, "◆ 間接競合", size=PptxStyle.SIZE_SMALL, color="999999")
+    # 凡例（python-pptx shapeで構築 - PPTX上で編集可能）
+    legend_x = 8.8
+    legend_y = 1.3
+    txBox_legend_title = slide1.shapes.add_textbox(
+        Inches(legend_x), Inches(legend_y), Inches(3), Inches(0.3))
+    _add_text(txBox_legend_title.text_frame, "凡例", size=9, bold=True, color=PptxStyle.SECONDARY)
+
+    legend_items = [
+        ("★", result.client_name[:12], "E94560"),
+        ("■", "直接競合", "0F3460"),
+        ("◆", "間接競合", "999999"),
+    ]
+    for li, (marker, label, color) in enumerate(legend_items):
+        ly = legend_y + 0.35 + li * 0.3
+        txBox_li = slide1.shapes.add_textbox(
+            Inches(legend_x), Inches(ly), Inches(3), Inches(0.25))
+        _add_text(txBox_li.text_frame, f"{marker} {label}", size=8, color=color)
 
     # 業界ポジション
     if comp.industry_position:
-        txBox_pos = slide1.shapes.add_textbox(Inches(9), Inches(3.5), Inches(2.8), Inches(2))
-        tf_pos = txBox_pos.text_frame
-        tf_pos.word_wrap = True
-        _add_text(tf_pos, "業界ポジション", size=PptxStyle.SIZE_SMALL, bold=True, color=PptxStyle.SECONDARY)
-        _add_text(tf_pos, comp.industry_position, size=PptxStyle.SIZE_SMALL, color=PptxStyle.TEXT_DARK)
+        pos_y = legend_y + 0.35 + len(legend_items) * 0.3 + 0.3
+        txBox_pos = slide1.shapes.add_textbox(Inches(legend_x), Inches(pos_y), Inches(3), Inches(0.25))
+        _add_text(txBox_pos.text_frame, "業界ポジション", size=9, bold=True, color=PptxStyle.SECONDARY)
+
+        pos_text = comp.industry_position[:120] + "…" if len(comp.industry_position) > 120 else comp.industry_position
+        txBox_posv = slide1.shapes.add_textbox(Inches(legend_x), Inches(pos_y + 0.3), Inches(3), Inches(2.5))
+        txBox_posv.text_frame.word_wrap = True
+        _add_text(txBox_posv.text_frame, pos_text, size=8, color=PptxStyle.TEXT_DARK)
 
     # --- ページ2: 競合比較表 ---
     all_competitors = comp.direct_competitors + comp.indirect_competitors
@@ -554,19 +655,24 @@ def _slide_customer(prs: Presentation, result: ResearchResult):
         y += 0.4
 
         for case in customer.similar_cases[:3]:
-            if y + 0.8 > MAX_Y:
+            if y + 1.2 > MAX_Y:
                 break
-            txBox_case = slide.shapes.add_textbox(Inches(0.7), Inches(y), Inches(10.5), Inches(0.7))
-            tf_case = txBox_case.text_frame
-            tf_case.word_wrap = True
-            _add_text(tf_case, f"{case.company}（{case.industry}）", size=PptxStyle.SIZE_BODY, bold=True, color=PptxStyle.ACCENT)
+            # 事例タイトル
+            txBox_ct = slide.shapes.add_textbox(Inches(0.7), Inches(y), Inches(10.5), Inches(0.3))
+            _add_text(txBox_ct.text_frame, f"{case.company}（{case.industry}）", size=PptxStyle.SIZE_BODY, bold=True, color=PptxStyle.ACCENT)
+            # 事例説明
             case_desc = case.description[:100] + "…" if len(case.description) > 100 else case.description
-            _add_text(tf_case, case_desc, size=PptxStyle.SIZE_SMALL, color=PptxStyle.TEXT_DARK)
-            y += 0.85
+            txBox_cd = slide.shapes.add_textbox(Inches(0.9), Inches(y + 0.3), Inches(10.3), Inches(0.7))
+            txBox_cd.text_frame.word_wrap = True
+            _add_text(txBox_cd.text_frame, case_desc, size=9, color=PptxStyle.TEXT_DARK)
+            if case.relevance:
+                rel_text = case.relevance[:80] + "…" if len(case.relevance) > 80 else case.relevance
+                _add_text(txBox_cd.text_frame, f"→ {rel_text}", size=8, color="666666")
+            y += 1.2
 
 
 def _slide_perspective(prs: Presentation, result: ResearchResult):
-    """立場別ニーズ分析スライド（3カラム）"""
+    """立場別ニーズ分析スライド（3カラム、テキストのみ - 装飾図形なし）"""
     perspective = result.perspective
     # データが空なら生成しない
     if not (perspective.executive.needs or perspective.frontline.needs or perspective.customer.needs):
@@ -579,29 +685,22 @@ def _slide_perspective(prs: Presentation, result: ResearchResult):
     tf = txBox.text_frame
     _add_text(tf, "立場別ニーズ分析", size=PptxStyle.SIZE_TITLE, bold=True, color=PptxStyle.PRIMARY)
 
-    line = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0.5), Inches(0.9), Inches(11), Pt(3))
-    _set_shape_bg(line, "8E44AD")
-    line.line.fill.background()
-
     # 3カラムの定義
     columns = [
         {
-            "title": "経営者視点",
-            "icon": "👔",
+            "title": "👔 経営者視点",
             "color": PptxStyle.ACCENT,
             "data": perspective.executive,
             "labels": ["必要なこと", "懸念事項", "成長機会"],
         },
         {
-            "title": "現場視点",
-            "icon": "🔧",
+            "title": "🔧 現場視点",
             "color": "27AE60",
             "data": perspective.frontline,
             "labels": ["必要なこと", "懸念事項", "改善機会"],
         },
         {
-            "title": "顧客視点",
-            "icon": "👤",
+            "title": "👤 顧客視点",
             "color": PptxStyle.HIGHLIGHT,
             "data": perspective.customer,
             "labels": ["求めていること", "不安・懸念", "理想の体験"],
@@ -617,23 +716,15 @@ def _slide_perspective(prs: Presentation, result: ResearchResult):
         data = col["data"]
         values = [data.needs, data.concerns, data.opportunities]
 
-        # カラムヘッダー背景
-        header_shape = slide.shapes.add_shape(
-            MSO_SHAPE.ROUNDED_RECTANGLE,
-            Inches(x), Inches(1.15), Inches(col_width), Inches(0.45),
+        # カラムヘッダー（テキストのみ、図形なし）
+        txBox_h = slide.shapes.add_textbox(
+            Inches(x), Inches(1.0), Inches(col_width), Inches(0.4),
         )
-        _set_shape_bg(header_shape, col["color"])
-        header_shape.line.fill.background()
-        h_tf = header_shape.text_frame
-        h_tf.paragraphs[0].alignment = PP_ALIGN.CENTER
-        run = h_tf.paragraphs[0].add_run()
-        run.text = f'{col["icon"]} {col["title"]}'
-        run.font.size = Pt(12)
-        run.font.bold = True
-        run.font.color.rgb = _hex_to_rgb(PptxStyle.TEXT_LIGHT)
+        _add_text(txBox_h.text_frame, col["title"], size=12, bold=True,
+                  color=col["color"], alignment=PP_ALIGN.CENTER)
 
         # 各項目（needs / concerns / opportunities）
-        item_y = 1.75
+        item_y = 1.5
         item_spacing = 1.8
 
         for label, value in zip(col["labels"], values):
@@ -641,8 +732,7 @@ def _slide_perspective(prs: Presentation, result: ResearchResult):
             txBox_label = slide.shapes.add_textbox(
                 Inches(x + 0.1), Inches(item_y), Inches(col_width - 0.2), Inches(0.25),
             )
-            tf_label = txBox_label.text_frame
-            _add_text(tf_label, f"■ {label}", size=8, bold=True, color=col["color"])
+            _add_text(txBox_label.text_frame, f"■ {label}", size=8, bold=True, color=col["color"])
 
             # 値テキスト（最大200文字、十分な高さを確保）
             display_val = value[:200] + "…" if len(value) > 200 else value
@@ -657,7 +747,7 @@ def _slide_perspective(prs: Presentation, result: ResearchResult):
 
 
 def _slide_questions(prs: Presentation, result: ResearchResult):
-    """考えるべき問いスライド（2〜3ページに分割）"""
+    """考えるべき問いスライド（テキストのみ - 装飾図形なし）"""
     qa = result.questions
     if not qa or not qa.questions:
         return
@@ -683,17 +773,12 @@ def _slide_questions(prs: Presentation, result: ResearchResult):
         tf = txBox.text_frame
         _add_text(tf, f"考えるべき問い{suffix}", size=PptxStyle.SIZE_TITLE, bold=True, color=PptxStyle.PRIMARY)
 
-        line = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0.5), Inches(0.9), Inches(11), Pt(3))
-        _set_shape_bg(line, "2980B9")
-        line.line.fill.background()
-
         # ロール表示
-        txBox_role = slide.shapes.add_textbox(Inches(0.5), Inches(1.05), Inches(11), Inches(0.3))
-        tf_role = txBox_role.text_frame
-        _add_text(tf_role, f"🎭 {role_name} の視点から", size=PptxStyle.SIZE_SMALL, bold=True, color="2980B9")
+        txBox_role = slide.shapes.add_textbox(Inches(0.5), Inches(0.9), Inches(11), Inches(0.3))
+        _add_text(txBox_role.text_frame, f"🎭 {role_name} の視点から", size=PptxStyle.SIZE_SMALL, bold=True, color="2980B9")
 
         # 問いリスト
-        y = 1.45
+        y = 1.3
         for i, q in enumerate(chunk, start_idx + 1):
             display_q = q[:120] + "…" if len(q) > 120 else q
             txBox_q = slide.shapes.add_textbox(Inches(0.6), Inches(y), Inches(10.8), Inches(0.35))
@@ -706,22 +791,17 @@ def _slide_questions(prs: Presentation, result: ResearchResult):
 
 
 def _slide_appendix(prs: Presentation, result: ResearchResult):
-    """付録 - 情報ソース一覧"""
+    """付録 - 情報ソース一覧（テキストのみ - 装飾図形なし）"""
     slide = _add_blank_slide(prs)
 
     txBox = slide.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(11), Inches(0.6))
     tf = txBox.text_frame
     _add_text(tf, "付録 - 情報ソース一覧", size=PptxStyle.SIZE_TITLE, bold=True, color=PptxStyle.PRIMARY)
 
-    line = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0.5), Inches(0.9), Inches(11), Pt(3))
-    _set_shape_bg(line, "999999")
-    line.line.fill.background()
+    txBox_note = slide.shapes.add_textbox(Inches(0.5), Inches(0.9), Inches(11), Inches(0.3))
+    _add_text(txBox_note.text_frame, f"分析実施日: {result.created_at}　|　情報ソース数: {len(result.sources)}件", size=PptxStyle.SIZE_SMALL, color="666666")
 
-    txBox_note = slide.shapes.add_textbox(Inches(0.5), Inches(1.1), Inches(11), Inches(0.3))
-    tf_note = txBox_note.text_frame
-    _add_text(tf_note, f"分析実施日: {result.created_at}　|　情報ソース数: {len(result.sources)}件", size=PptxStyle.SIZE_SMALL, color="666666")
-
-    y = 1.5
+    y = 1.3
     for i, source in enumerate(result.sources[:20], 1):
         if y > 6.5:
             # 次のスライドへ
